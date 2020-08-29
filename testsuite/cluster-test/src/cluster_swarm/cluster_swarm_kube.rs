@@ -26,9 +26,7 @@ use crate::instance::{
 };
 use k8s_openapi::api::batch::v1::Job;
 use kube::api::ListParams;
-use libra_config::config::{
-    NodeConfig, PersistableConfig, SafetyRulesConfig, DEFAULT_JSON_RPC_PORT,
-};
+use libra_config::config::DEFAULT_JSON_RPC_PORT;
 use reqwest::Client as HttpClient;
 use rusoto_core::Region;
 use rusoto_s3::{PutObjectRequest, S3Client, S3};
@@ -674,14 +672,14 @@ impl ClusterSwarmKube {
             node,
             pod_name,
             format!("{}parser.conf", dir).as_str(),
-            parsers_config.into_bytes(),
+            parsers_config.as_bytes(),
         )
         .await?;
         self.put_file(
             node,
             pod_name,
             format!("{}fluent-bit.conf", dir).as_str(),
-            fluentbit_config.into_bytes(),
+            fluentbit_config.as_bytes(),
         )
         .await?;
         Ok(())
@@ -690,7 +688,7 @@ impl ClusterSwarmKube {
     async fn put_genesis_file(&self, pod_name: &str, node: &str) -> Result<()> {
         let genesis = std::fs::read(GENESIS_PATH)
             .map_err(|e| format_err!("Failed to read {} : {}", GENESIS_PATH, e))?;
-        self.put_file(node, pod_name, "/opt/libra/etc/genesis.blob", genesis)
+        self.put_file(node, pod_name, "/opt/libra/etc/genesis.blob", genesis.as_slice())
             .await?;
         Ok(())
     }
@@ -703,7 +701,7 @@ impl ClusterSwarmKube {
     ) -> Result<()> {
         let node_config = match &instance_config.application_config {
             Validator(validator_config) => {
-                let config = format!(
+                format!(
                     include_str!("configs/validator.yaml"),
                     vault_addr = validator_config
                         .vault_addr
@@ -717,13 +715,10 @@ impl ClusterSwarmKube {
                         .safety_rules_addr
                         .as_ref()
                         .unwrap_or(&"".to_string()),
-                );
-                Some(serde_yaml::to_vec(&NodeConfig::parse(&config).map_err(
-                    |e| format_err!("Failed to parse config template : {}", e),
-                )?)?)
+                )
             }
             Fullnode(fullnode_config) => {
-                let config = format!(
+                format!(
                     include_str!("configs/fullnode.yaml"),
                     vault_addr = fullnode_config
                         .vault_addr
@@ -734,31 +729,23 @@ impl ClusterSwarmKube {
                         .as_ref()
                         .unwrap_or(&"".to_string()),
                     seed_peer_ip = fullnode_config.seed_peer_ip,
-                );
-                Some(serde_yaml::to_vec::<NodeConfig>(
-                    &NodeConfig::parse(&config)
-                        .map_err(|e| format_err!("Failed to parse config template : {}", e))?,
-                )?)
+                )
             }
             LSR(lsr_config) => {
-                let config = format!(
+                format!(
                     include_str!("configs/safetyrules.yaml"),
                     vault_addr = lsr_config.vault_addr.as_ref().unwrap_or(&"".to_string()),
                     vault_ns = lsr_config
                         .vault_namespace
                         .as_ref()
                         .unwrap_or(&"".to_string()),
-                );
-                Some(serde_yaml::to_vec::<SafetyRulesConfig>(
-                    &SafetyRulesConfig::parse(&config)
-                        .map_err(|e| format_err!("Failed to parse config template : {}", e))?,
-                )?)
+                )
             }
-            _ => None,
+            _ => "".to_string(),
         };
 
-        if let Some(node_config) = node_config {
-            self.put_file(node, pod_name, "/opt/libra/etc/node.yaml", node_config)
+        if !node_config.is_empty() {
+            self.put_file(node, pod_name, "/opt/libra/etc/node.yaml", node_config.as_bytes())
                 .await?;
         }
 
@@ -795,13 +782,13 @@ impl ClusterSwarm for ClusterSwarmKube {
         node: &str,
         pod_name: &str,
         path: &str,
-        content: Vec<u8>,
+        content: &[u8],
     ) -> Result<()> {
         let bucket = "toro-cluster-test-flamegraphs";
         let run_id = env::var("RUN_ID").expect("RUN_ID is not set.");
         libra_retrier::retry_async(k8s_retry_strategy(), || {
             let run_id = &run_id;
-            let content = content.clone();
+            let content = content.to_vec();
             Box::pin(async move {
                 self.s3_client
                     .put_object(PutObjectRequest {
